@@ -7,7 +7,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt update
 # insatlling sudo git, curl, jq, make
 RUN apt install sudo
-RUN apt install -y git curl make jq wget bash direnv
+RUN apt install -y git curl make jq wget bash direnv docker.io
 # installing Go
 RUN wget https://go.dev/dl/go1.20.linux-amd64.tar.gz
 RUN rm -rf go1.21.3.src.tar.gz
@@ -19,19 +19,6 @@ RUN echo 'node ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 
 USER node
 WORKDIR /home/node
-# # insatlling Node lts via NVM
-# RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
-# #RUN useradd -ms /bin/bash ubuntu
-# # nvm
-# RUN echo 'export NVM_DIR="$HOME/.nvm"'                                       >> "$HOME/.bashrc"
-# RUN echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm' >> "$HOME/.bashrc"
-# RUN echo '[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion" # This loads nvm bash_completion' >> "$HOME/.bashrc"
-# # nodejs and tools
-# RUN bash -c 'source $HOME/.nvm/nvm.sh   && \
-#     nvm install node                    && \
-#     npm install -g doctoc urchin eclint dockerfile_lint && \
-#     npm install --prefix "$HOME/.nvm/"'
-
 # RUN source  ~/.bashrc
 # installing foundry
 RUN echo export PATH=$PATH:/home/node/.foundry/bin >> ~/.bashrc
@@ -48,6 +35,10 @@ RUN sudo npm i -g pnpm
 RUN npx pnpm install && npx pnpm build
 RUN make op-node op-batcher op-proposer
 RUN make build
+
+# Once finished, run `docker run -ti --rm softsky/op-l2:latest`, then from inside the container run `make devnet-up`
+
+
 
 WORKDIR /home/node
 # ### Build op-geth
@@ -114,6 +105,12 @@ RUN cd $HOME/optimism/packages/contracts-bedrock && cp .envrc.example .envrc && 
 # Before we can create our configuration file, we’ll need to pick an L1 block to serve as the starting point for our Rollup. It’s best to use a finalized L1 block as our starting block. You can use the cast command provided by Foundry to grab all of the necessary information:
 
 ARG ETH_RPC_URL="${ETH_RPC_URL}"
+ARG DEPLOYMENT_CONTEXT="${DEPLOYMENT_CONTEXT}"
+ARG TENDERLY_PROJECT="${TENDERLY_PROJECT}"
+ARG TENDERLY_USERNAME="${TENDERLY_USERNAME}"
+ARG ETHERSCAN_API_KEY="${ETHERSCAN_API_KEY}"
+
+RUN export ETHERSCAN_API_KEY="${ETHERSCAN_API_KEY}"
 RUN cast block finalized --rpc-url $ETH_RPC_URL | grep -E "(timestamp|hash|number)"
 # You’ll get back something that looks like the following:
 
@@ -130,4 +127,10 @@ RUN cast block finalized --rpc-url $ETH_RPC_URL | grep -E "(timestamp|hash|numbe
 # Replace "BLOCKHASH" with the blockhash you got from the cast command.
 # Replace TIMESTAMP with the timestamp you got from the cast command. Note that although all the other fields are strings, this field is a number! Don’t include the quotation marks
 
+WORKDIR /home/node/optimism
+RUN wget -c https://gethstore.blob.core.windows.net/builds/geth-linux-amd64-1.13.4-3f907d6a.tar.gz -O - | tar xz
+RUN sudo mv geth-linux-amd64-1.13.4-3f907d6a/geth /usr/local/bin
+RUN rm -rf geth-linux-amd64-1.13.4-3f907d6a
+RUN npx nx reset
+RUN make build
 ENTRYPOINT /bin/bash
