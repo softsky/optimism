@@ -14,17 +14,19 @@ sudo apt-get update && sudo apt-get install nodejs -y
 sudo apt install sudo
 sudo apt install -y git curl make jq wget bash direnv docker.io
 
-#installing docker-compose
-wget -L https://github.com/docker/compose/archive/refs/tags/v2.23.0.tar.gz -O -| tar xz
-cd compose-2.* && make && make build && sudo make install
 
 # installing Go
-wget -L https://go.dev/dl/go1.21.3.linux-amd64.tar.gz -O - | tar xz
+GOVERSION=1.21.3
+wget -L https://go.dev/dl/go$GOVERSION.linux-amd64.tar.gz -O - | tar xz
 sudo rm -rf /usr/local/go /usr/local/bin/go
 sudo mv go /usr/local/
 sudo ln -s /usr/local/bin/go /usr/local/bin
 echo export GOROOT=/usr/local/go >> ~/.bashrc
 sudo su - -c "echo '$USER ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
+
+#installing docker-compose
+wget -L https://github.com/docker/compose/archive/refs/tags/v2.23.0.tar.gz -O -| tar xz
+cd compose-2.* && make && make build && sudo make install
 
 # RUN source  ~/.bashrc
 # installing foundry
