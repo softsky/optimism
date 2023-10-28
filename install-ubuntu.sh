@@ -13,6 +13,11 @@ sudo apt-get update && sudo apt-get install nodejs -y
 # insatlling sudo git, curl, jq, make
 sudo apt install sudo
 sudo apt install -y git curl make jq wget bash direnv docker.io
+
+#installing docker-compose
+wget -L https://github.com/docker/compose/archive/refs/tags/v2.23.0.tar.gz -O -| tar xz
+cd compose-2.* && make && make build && sudo make install
+
 # installing Go
 wget https://go.dev/dl/go1.20.linux-amd64.tar.gz
 tar xvzf go1.20.linux-amd64.tar.gz
