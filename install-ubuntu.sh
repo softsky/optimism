@@ -18,6 +18,7 @@ sudo gpasswd -a $USER docker
 
 # installing Go
 GOVERSION=1.21.3
+
 wget -L https://go.dev/dl/go$GOVERSION.linux-amd64.tar.gz -O - | tar xz
 sudo rm -rf /usr/local/go /usr/local/bin/go
 sudo mv go /usr/local/
