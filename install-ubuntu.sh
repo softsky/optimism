@@ -142,3 +142,8 @@ sudo mv geth-linux-amd64-1.13.4-3f907d6a/geth /usr/local/bin
 rm -rf geth-linux-amd64-1.13.4-3f907d6a
 npx nx reset
 make build
+
+
+echo "################################################################################"
+echo "# You should log off your shell and login again to apply environmental changes #"
+echo "################################################################################"
