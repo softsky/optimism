@@ -1,51 +1,47 @@
-FROM node:latest
+#!/bin/sh
 
-# Set the SHELL to bash with pipefail option
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# # Set the SHELL to bash with pipefail option
+# SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ### Installation
 # updating system
-RUN apt update
+sudo apt update
 # insatlling sudo git, curl, jq, make
-RUN apt install sudo
-RUN apt install -y git curl make jq wget bash direnv docker.io
+sudo apt install sudo
+sudo apt install -y git curl make jq wget bash direnv docker.io
 # installing Go
-RUN wget https://go.dev/dl/go1.20.linux-amd64.tar.gz
-RUN rm -rf go1.21.3.src.tar.gz
-RUN tar xvzf go1.20.linux-amd64.tar.gz
-RUN cp go/bin/go /usr/bin/go
-RUN mv go /usr/local/
-RUN echo export GOROOT=/usr/local/go >> ~/.bashrc
-RUN echo 'node ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+wget https://go.dev/dl/go1.20.linux-amd64.tar.gz
+tar xvzf go1.20.linux-amd64.tar.gz
+rm -rf go1.21.3.src.tar.gz
+sudo cp go/bin/go /usr/bin/go
+sudo mv go /usr/local/
+echo export GOROOT=/usr/local/go >> ~/.bashrc
+sudo su - -c "echo 'node ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
 
-USER node
-WORKDIR /home/node
 # RUN source  ~/.bashrc
 # installing foundry
-RUN echo export PATH=$PATH:/home/node/.foundry/bin >> ~/.bashrc
-ENV PATH="$PATH:/home/node/.foundry/bin"
-RUN cd &&  bash -c "curl -L https://foundry.paradigm.xyz | bash"
-RUN foundryup
+echo export PATH=${PATH}:/home/node/.foundry/bin >> ~/.bashrc
+export PATH="${PATH}:${HOME}/.foundry/bin"
+cd &&  bash -c "curl -L https://foundry.paradigm.xyz | bash"
+foundryup
 # installing yarn and pnpm
 # ### Build the Optimism Monorepo
-RUN echo $PATH && echo $(pwd) && sleep 2
-RUN cd && git clone --recurse-submodules https://github.com/ethereum-optimism/optimism.git
-WORKDIR /home/node/optimism
-RUN sudo npm i -g npm@10.2.1
-RUN sudo npm i -g pnpm
-RUN npx pnpm install && npx pnpm build
-RUN make op-node op-batcher op-proposer
-RUN make build
+cd && git clone --recurse-submodules https://github.com/ethereum-optimism/optimism.git
+cd optimism
+npx npm i -g npm@10.2.1
+npx npm i -g pnpm
+npx pnpm install && npx pnpm build
+make op-node op-batcher op-proposer
+make build
 
 # Once finished, run `docker run -ti --rm softsky/op-l2:latest`, then from inside the container run `make devnet-up`
 
+cd
 
-
-WORKDIR /home/node
 # ### Build op-geth
-RUN git clone https://github.com/ethereum-optimism/op-geth.git
-WORKDIR /home/node/op-geth
-RUN pnpm install geth
-RUN make geth
+git clone https://github.com/ethereum-optimism/op-geth.git
+cd op-geth
+npx pnpm install geth
+make geth
 
 # ###    Generate some keys
 # #    You’ll need four accounts and their private keys when setting up the chain:
@@ -57,7 +53,7 @@ RUN make geth
 # # The Sequencer account which signs blocks on the p2p network.                             #
 # # You can generate all of these keys with the rekey tool in the contracts-bedrock package. #
 # ############################################################################################
-RUN cd && cd optimism/packages/contracts-bedrock && echo "Admin:" \
+cd && cd optimism/packages/contracts-bedrock && echo "Admin:" \
     cast wallet new \
     echo "Proposer:" \
     cast wallet new \
@@ -92,7 +88,7 @@ RUN cd && cd optimism/packages/contracts-bedrock && echo "Admin:" \
 # # Enter the Optimism Monorepo:
 
 
-RUN cd $HOME/optimism/packages/contracts-bedrock && cp .envrc.example .envrc && direnv allow .
+cd $HOME/optimism/packages/contracts-bedrock && cp .envrc.example .envrc && direnv allow .
 # Fill out the environment variables inside of that file:
 
 # ETH_RPC_URL — URL for your L1 node.
@@ -104,14 +100,14 @@ RUN cd $HOME/optimism/packages/contracts-bedrock && cp .envrc.example .envrc && 
 
 # Before we can create our configuration file, we’ll need to pick an L1 block to serve as the starting point for our Rollup. It’s best to use a finalized L1 block as our starting block. You can use the cast command provided by Foundry to grab all of the necessary information:
 
-ARG ETH_RPC_URL="${ETH_RPC_URL}"
-ARG DEPLOYMENT_CONTEXT="${DEPLOYMENT_CONTEXT}"
-ARG TENDERLY_PROJECT="${TENDERLY_PROJECT}"
-ARG TENDERLY_USERNAME="${TENDERLY_USERNAME}"
-ARG ETHERSCAN_API_KEY="${ETHERSCAN_API_KEY}"
+export ETH_RPC_URL="${ETH_RPC_URL}"
+export DEPLOYMENT_CONTEXT="${DEPLOYMENT_CONTEXT}"
+export TENDERLY_PROJECT="${TENDERLY_PROJECT}"
+export TENDERLY_USERNAME="${TENDERLY_USERNAME}"
+export ETHERSCAN_API_KEY="${ETHERSCAN_API_KEY}"
 
-RUN export ETHERSCAN_API_KEY="${ETHERSCAN_API_KEY}"
-RUN cast block finalized --rpc-url $ETH_RPC_URL | grep -E "(timestamp|hash|number)"
+export ETHERSCAN_API_KEY="${ETHERSCAN_API_KEY}"
+cast block finalized --rpc-url $ETH_RPC_URL | grep -E "(timestamp|hash|number)"
 # You’ll get back something that looks like the following:
 
 
@@ -127,10 +123,9 @@ RUN cast block finalized --rpc-url $ETH_RPC_URL | grep -E "(timestamp|hash|numbe
 # Replace "BLOCKHASH" with the blockhash you got from the cast command.
 # Replace TIMESTAMP with the timestamp you got from the cast command. Note that although all the other fields are strings, this field is a number! Don’t include the quotation marks
 
-WORKDIR /home/node/optimism
-RUN wget -c https://gethstore.blob.core.windows.net/builds/geth-linux-amd64-1.13.4-3f907d6a.tar.gz -O - | tar xz
-RUN sudo mv geth-linux-amd64-1.13.4-3f907d6a/geth /usr/local/bin
-RUN rm -rf geth-linux-amd64-1.13.4-3f907d6a
-RUN npx nx reset
-RUN make build
-ENTRYPOINT /bin/bash
+cd ~/optimism
+wget -c https://gethstore.blob.core.windows.net/builds/geth-linux-amd64-1.13.4-3f907d6a.tar.gz -O - | tar xz
+sudo mv geth-linux-amd64-1.13.4-3f907d6a/geth /usr/local/bin
+rm -rf geth-linux-amd64-1.13.4-3f907d6a
+npx nx reset
+make build
