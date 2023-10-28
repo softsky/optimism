@@ -13,7 +13,8 @@ sudo apt-get update && sudo apt-get install nodejs -y
 # insatlling sudo git, curl, jq, make
 sudo apt install sudo
 sudo apt install -y git curl make jq wget bash direnv docker.io
-
+sudo apt install docker-compose-v2 docker-buildx -y
+sudo gpasswd -a $USER docker
 
 # installing Go
 GOVERSION=1.21.3
