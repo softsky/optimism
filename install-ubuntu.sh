@@ -20,11 +20,11 @@ rm -rf go1.21.3.src.tar.gz
 sudo cp go/bin/go /usr/bin/go
 sudo mv go /usr/local/
 echo export GOROOT=/usr/local/go >> ~/.bashrc
-sudo su - -c "echo 'node ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
+sudo su - -c "echo '$USER ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
 
 # RUN source  ~/.bashrc
 # installing foundry
-echo export PATH=${PATH}:/home/node/.foundry/bin >> ~/.bashrc
+echo export PATH=${PATH}:/home/$USER/.foundry/bin >> ~/.bashrc
 export PATH="${PATH}:${HOME}/.foundry/bin"
 cd &&  bash -c "curl -L https://foundry.paradigm.xyz | bash"
 foundryup
