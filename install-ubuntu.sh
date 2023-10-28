@@ -32,8 +32,8 @@ foundryup
 # ### Build the Optimism Monorepo
 cd && git clone --recurse-submodules https://github.com/ethereum-optimism/optimism.git
 cd optimism
-npx npm i -g npm@10.2.1
-npx npm i -g pnpm
+sudo npx npm i -g npm@10.2.1
+sudo npx npm i -g pnpm yarn
 npx pnpm install && npx pnpm build
 make op-node op-batcher op-proposer
 make build
