@@ -19,11 +19,10 @@ wget -L https://github.com/docker/compose/archive/refs/tags/v2.23.0.tar.gz -O -|
 cd compose-2.* && make && make build && sudo make install
 
 # installing Go
-wget https://go.dev/dl/go1.20.linux-amd64.tar.gz
-tar xvzf go1.20.linux-amd64.tar.gz
-rm -rf go1.21.3.src.tar.gz
-sudo cp go/bin/go /usr/bin/go
+wget -L https://go.dev/dl/go1.21.3.linux-amd64.tar.gz -O - | tar xz
+sudo rm -rf /usr/local/go /usr/local/bin/go
 sudo mv go /usr/local/
+sudo ln -s /usr/local/bin/go /usr/local/bin
 echo export GOROOT=/usr/local/go >> ~/.bashrc
 sudo su - -c "echo '$USER ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers"
 
