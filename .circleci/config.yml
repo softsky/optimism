@@ -1,5 +1,10 @@
 version: 2.1
 
+parameters:
+  ci_builder_image:
+    type: string
+    default: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:v0.30.0
+
 orbs:
   go: circleci/go@1.8.0
   gcp-cli: circleci/gcp-cli@3.0.1
@@ -58,10 +63,23 @@ commands:
             cd ops/check-changed
             pip3 install -r requirements.txt
             python3 main.py "<<parameters.patterns>>"
+  notify-failures-on-develop:
+    description: "Notify Slack"
+    parameters:
+      channel:
+        type: string
+        default: C03N11M0BBN
+    steps:
+      - slack/notify:
+          channel: << parameters.channel >>
+          event: fail
+          template: basic_fail_1
+          branch_pattern: develop
+
 jobs:
   cannon-go-lint-and-test:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     resource_class: medium
     steps:
       - checkout
@@ -92,7 +110,7 @@ jobs:
           path: /tmp/test-results
   cannon-build-test-vectors:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     resource_class: medium
     steps:
       - checkout
@@ -105,10 +123,13 @@ jobs:
 
   pnpm-monorepo:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     resource_class: xlarge
     steps:
       - checkout
+      - run:
+          name: git submodules
+          command: make submodules
       - check-changed:
           patterns: op-chain-ops,packages/
       - restore_cache:
@@ -142,7 +163,11 @@ jobs:
           root: "."
           paths:
             - "packages/**/dist"
+            - "packages/contracts-bedrock/cache"
+            - "packages/contracts-bedrock/artifacts"
             - "packages/contracts-bedrock/forge-artifacts"
+            - "packages/contracts-bedrock/tsconfig.tsbuildinfo"
+            - "packages/contracts-bedrock/tsconfig.build.tsbuildinfo"
 
   docker-build:
     environment:
@@ -179,9 +204,13 @@ jobs:
         description: Run the release script
         type: boolean
         default: false
+      resource_class:
+        description: Docker resoruce class
+        type: string
+        default: medium
     machine:
       image: ubuntu-2204:2022.07.1
-      resource_class: medium
+      resource_class: "<<parameters.resource_class>>"
       docker_layer_caching: true  # we rely on this for faster builds, and actively warm it up for builds with common stages
     steps:
       - checkout
@@ -261,6 +290,10 @@ jobs:
 
           no_output_timeout: 45m
       - when:
+          condition: "<<parameters.publish>>"
+          steps:
+            - notify-failures-on-develop
+      - when:
           condition: "<<parameters.save_image_tag>>"
           steps:
             - run:
@@ -283,16 +316,20 @@ jobs:
 
   contracts-bedrock-coverage:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     resource_class: xlarge
     steps:
       - checkout
+      - run:
+          name: git submodules
+          command: make submodules
       - check-changed:
           patterns: contracts-bedrock,op-node
       - run:
           name: print forge version
           command: forge --version
           working_directory: packages/contracts-bedrock
+      # We do not use the pre-built contracts becuase forge coverage uses different optimizer settings
       - run:
           name: test and generate coverage
           command: pnpm coverage:lcov
@@ -308,34 +345,18 @@ jobs:
 
   contracts-bedrock-tests:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
-    resource_class: xlarge
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: medium
     steps:
       - checkout
-      - check-changed:
-          patterns: contracts-bedrock,op-node
       - run:
-          name: print forge version
-          command: forge --version
-          working_directory: packages/contracts-bedrock
-      - run:
-          name: run tests
-          command: pnpm test
-          environment:
-            FOUNDRY_PROFILE: ci
-          working_directory: packages/contracts-bedrock
-          no_output_timeout: 15m
-
-  contracts-bedrock-checks:
-    docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
-    resource_class: xlarge
-    steps:
-      - checkout
+          name: git submodules
+          command: make submodules
       - restore_cache:
           name: Restore PNPM Package Cache
           keys:
             - pnpm-packages-v2-{{ checksum "pnpm-lock.yaml" }}
+      - attach_workspace: { at: "." }
       - check-changed:
           patterns: contracts-bedrock,op-node
       # populate node modules from the cache
@@ -343,8 +364,47 @@ jobs:
           name: Install dependencies
           command: pnpm install --frozen-lockfile --prefer-offline
       - run:
-          name: build contracts
-          command: pnpm build
+          name: print forge version
+          command: forge --version
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: run tests
+          command: STRICT_DEPLOYMENT=false pnpm test
+          environment:
+            FOUNDRY_PROFILE: ci
+          working_directory: packages/contracts-bedrock
+          no_output_timeout: 15m
+
+  contracts-bedrock-checks:
+    docker:
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: git submodules
+          command: make submodules
+      - restore_cache:
+          name: Restore PNPM Package Cache
+          keys:
+            - pnpm-packages-v2-{{ checksum "pnpm-lock.yaml" }}
+      - attach_workspace: { at: "." }
+      - check-changed:
+          patterns: contracts-bedrock,op-node
+      # populate node modules from the cache
+      - run:
+          name: Install dependencies
+          command: pnpm install --frozen-lockfile --prefer-offline
+      # Note: this step needs to come first because one of the later steps modifies the cache & forces a contracts rebuild
+      - run:
+          name: semver lock
+          command: |
+            pnpm semver-lock
+            git diff --exit-code semver-lock.json || echo "export SEMVER_LOCK_STATUS=1" >> "$BASH_ENV"
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: check deploy configs
+          command: pnpm validate-deploy-configs || echo "export DEPLOY_CONFIGS_STATUS=1" >> "$BASH_ENV"
           working_directory: packages/contracts-bedrock
       - run:
           name: lint
@@ -355,7 +415,7 @@ jobs:
           name: gas snapshot
           command: |
             forge --version
-            pnpm gas-snapshot --check || echo "export GAS_SNAPSHOT_STATUS=1" >> "$BASH_ENV"
+            STRICT_DEPLOYMENT=false pnpm gas-snapshot --check || echo "export GAS_SNAPSHOT_STATUS=1" >> "$BASH_ENV"
           environment:
             FOUNDRY_PROFILE: ci
           working_directory: packages/contracts-bedrock
@@ -367,20 +427,10 @@ jobs:
             git diff --exit-code .storage-layout || echo "export STORAGE_SNAPSHOT_STATUS=1" >> "$BASH_ENV"
           working_directory: packages/contracts-bedrock
       - run:
-          name: semver lock
-          command: |
-            pnpm semver-lock
-            git diff --exit-code semver-lock.json || echo "export SEMVER_LOCK_STATUS=1" >> "$BASH_ENV"
-          working_directory: packages/contracts-bedrock
-      - run:
           name: invariant docs
           command: |
             pnpm autogen:invariant-docs
             git diff --exit-code ./invariant-docs/*.md || echo "export INVARIANT_DOCS_STATUS=1" >> "$BASH_ENV"
-          working_directory: packages/contracts-bedrock
-      - run:
-          name: check deploy configs
-          command: pnpm validate-deploy-configs || echo "export DEPLOY_CONFIGS_STATUS=1" >> "$BASH_ENV"
           working_directory: packages/contracts-bedrock
       - run:
           name: check statuses
@@ -415,8 +465,8 @@ jobs:
 
   contracts-bedrock-slither:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
-    resource_class: large
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: medium
     steps:
       - checkout
       - check-changed:
@@ -428,15 +478,15 @@ jobs:
 
   contracts-bedrock-validate-spaces:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: medium
     steps:
       - checkout
-      - attach_workspace: { at: "." }
       - restore_cache:
           name: Restore PNPM Package Cache
           keys:
             - pnpm-packages-v2-{{ checksum "pnpm-lock.yaml" }}
-      # populate node modules from the cache
+      - attach_workspace: { at: "." }
       - run:
           name: Install dependencies
           command: pnpm install --frozen-lockfile --prefer-offline
@@ -449,8 +499,8 @@ jobs:
 
   op-bindings-build:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
-    resource_class: large
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: xlarge
     steps:
       - checkout
       - run:
@@ -471,7 +521,7 @@ jobs:
         description: Coverage flag name
         type: string
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     resource_class: large
     steps:
       - checkout
@@ -500,8 +550,8 @@ jobs:
 
   contracts-ts-tests:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
-    resource_class: large
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: medium
     steps:
       - checkout
       - attach_workspace: { at: "." }
@@ -522,8 +572,8 @@ jobs:
 
   sdk-next-tests:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
-    resource_class: large
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: medium
     steps:
       - checkout
       - attach_workspace: { at: "." }
@@ -585,10 +635,7 @@ jobs:
       - run:
           name: Check TODO issues
           command: ./ops/scripts/todo-checker.sh --verbose
-      - slack/notify:
-          channel: C03N11M0BBN
-          event: fail
-          template: basic_fail_1
+      - notify-failures-on-develop
 
   bedrock-markdown:
     machine:
@@ -632,10 +679,8 @@ jobs:
           name: link lint
           command: |
             make bedrock-markdown-links
-      - slack/notify:
+      - notify-failures-on-develop:
           channel: C055R639XT9 #notify-link-check
-          event: fail
-          template: basic_fail_1
 
   fuzz-golang:
     parameters:
@@ -646,7 +691,7 @@ jobs:
         description: changed pattern to fire fuzzer on
         type: string
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - check-changed:
@@ -668,7 +713,7 @@ jobs:
 
   depcheck:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - attach_workspace: { at: "." }
@@ -693,7 +738,7 @@ jobs:
 
   l1-geth-version-check:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - run:
@@ -702,7 +747,7 @@ jobs:
 
   go-lint:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - restore_cache:
@@ -734,7 +779,7 @@ jobs:
         description: Go Module Name
         type: string
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest # only used to enable codecov.
+      - image: <<pipeline.parameters.ci_builder_image>> # only used to enable codecov.
     resource_class: xlarge
     steps:
       - checkout
@@ -758,9 +803,10 @@ jobs:
           key: golang-build-cache-<<parameters.module>>
           paths:
             - "/root/.cache/go-build"
-      - run:
-          name: upload coverage
-          command: codecov --verbose --clean --flags bedrock-go-tests
+      # TODO(CLI-148): Fix codecov
+      #- run:
+          #name: upload coverage
+          #command: codecov --verbose --clean --flags bedrock-go-tests
       - store_test_results:
           path: /tmp/test-results
 
@@ -777,8 +823,14 @@ jobs:
         default: true
         type: boolean
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     resource_class: xlarge
+    # Note: Tests are split between runs manually.
+    # Tests default to run on the first executor but can be moved to the second with:
+    # InitParallel(t, UseExecutor(1))
+    # Any tests assigned to an executor greater than the number available automatically use the last executor.
+    # Executor indexes start from 0
+    parallelism: 2
     steps:
       - checkout
       - check-changed:
@@ -827,7 +879,7 @@ jobs:
         type: string
         default: this-package-does-not-exist
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - check-changed:
@@ -855,9 +907,9 @@ jobs:
 
   indexer-tests:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
       - image: cimg/postgres:14.1
-    resource_class: large
+    resource_class: xlarge
     steps:
       - checkout
       - check-changed:
@@ -902,7 +954,7 @@ jobs:
 
   cannon-prestate:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - restore_cache:
@@ -932,7 +984,8 @@ jobs:
 
   devnet-allocs:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
+    resource_class: xlarge
     steps:
       - checkout
       - restore_cache:
@@ -1119,10 +1172,11 @@ jobs:
       - run:
           name: "Semgrep scan"
           command: semgrep ci
+      - notify-failures-on-develop
 
   go-mod-download:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     parameters:
       file:
         default: go.sum
@@ -1151,7 +1205,7 @@ jobs:
 
   go-mod-tidy:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - restore_cache:
@@ -1163,7 +1217,7 @@ jobs:
 
   bedrock-go-tests:  # just a helper, that depends on all the actual test jobs
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     resource_class: medium
     steps:
       - run: echo Done
@@ -1178,14 +1232,11 @@ jobs:
           command: |
             make verify-goerli
           working_directory: op-program
-      - slack/notify:
-          channel: C03N11M0BBN
-          event: fail
-          template: basic_fail_1
+      - notify-failures-on-develop
 
   op-program-compat:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - restore_cache:
@@ -1201,7 +1252,7 @@ jobs:
 
   check-generated-mocks-op-node:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - check-changed:
@@ -1212,7 +1263,7 @@ jobs:
 
   check-generated-mocks-op-service:
     docker:
-      - image: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-builder:latest
+      - image: <<pipeline.parameters.ci_builder_image>>
     steps:
       - checkout
       - check-changed:
@@ -1221,6 +1272,28 @@ jobs:
           name: check-generated-mocks
           command: make generate-mocks-op-service && git diff --exit-code
 
+  check-values-match:
+    parameters:
+      pattern_file1:
+        type: string
+        default: ""
+      pattern_file2:
+        type: string
+        default: ""
+      file1_path:
+        type: string
+        default: ""
+      file2_path:
+        type: string
+        default: ""
+    docker:
+      - image: <<pipeline.parameters.ci_builder_image>>
+    steps:
+      - checkout
+      - run:
+          name: Verify Values Match
+          command: |
+            ./ops/scripts/ci-match-values-between-files.sh "<< parameters.file1_path >>" "<< parameters.pattern_file1 >>" "<< parameters.file2_path >>" "<< parameters.pattern_file2 >>"
 workflows:
   main:
     when:
@@ -1240,7 +1313,9 @@ workflows:
           package_name: core-utils
           requires:
             - pnpm-monorepo
-      - contracts-bedrock-tests
+      - contracts-bedrock-tests:
+          requires:
+            - pnpm-monorepo
       - contracts-bedrock-coverage
       - contracts-bedrock-checks:
           requires:
@@ -1467,7 +1542,6 @@ workflows:
       - check-generated-mocks-op-service
       - cannon-go-lint-and-test
       - cannon-build-test-vectors
-
   release:
     when:
       not:
@@ -1477,14 +1551,14 @@ workflows:
           type: approval
           filters:
             tags:
-              only: /^(proxyd|indexer|ci-builder|ufm-[a-z0-9\-]*|op-[a-z0-9\-]*)\/v.*/
+              only: /^(proxyd|chain-mon|indexer|ci-builder|ufm-[a-z0-9\-]*|op-[a-z0-9\-]*)\/v.*/
             branches:
               ignore: /.*/
       - docker-build: # just to warm up the cache (other jobs run in parallel)
           name: op-stack-go-docker-build-release
           filters:
             tags:
-              only: /^(proxyd|indexer|ci-builder|ufm-[a-z0-9\-]*|op-[a-z0-9\-]*)\/v.*/
+              only: /^(proxyd|chain-mon|indexer|ci-builder|ufm-[a-z0-9\-]*|op-[a-z0-9\-]*)\/v.*/
             branches:
               ignore: /.*/
           docker_name: op-stack-go
@@ -1613,6 +1687,22 @@ workflows:
           requires:
             - hold
       - docker-build:
+          name: chain-mon-docker-release
+          filters:
+            tags:
+              only: /^chain-mon\/v.*/
+            branches:
+              ignore: /.*/
+          docker_name: chain-mon
+          docker_tags: <<pipeline.git.revision>>,latest
+          publish: true
+          release: true
+          resource_class: xlarge
+          context:
+            - oplabs-gcr-release
+          requires:
+            - hold
+      - docker-build:
           name: ci-builder-docker-release
           filters:
             tags:
@@ -1623,6 +1713,7 @@ workflows:
           docker_tags: <<pipeline.git.revision>>,latest
           publish: true
           release: true
+          resource_class: xlarge
           context:
             - oplabs-gcr
           requires:
@@ -1679,6 +1770,7 @@ workflows:
           platforms: "linux/amd64,linux/arm64"
           context:
             - oplabs-gcr
+            - slack
       - docker-build:
           name: op-node-docker-publish
           docker_name: op-node
@@ -1688,6 +1780,7 @@ workflows:
           publish: true
           context:
             - oplabs-gcr
+            - slack
       - docker-build:
           name: op-batcher-docker-publish
           docker_name: op-batcher
@@ -1697,6 +1790,7 @@ workflows:
           publish: true
           context:
             - oplabs-gcr
+            - slack
       - docker-build:
           name: op-program-docker-publish
           docker_name: op-program
@@ -1706,6 +1800,7 @@ workflows:
           publish: true
           context:
             - oplabs-gcr
+            - slack
       - docker-build:
           name: op-proposer-docker-publish
           docker_name: op-proposer
@@ -1715,6 +1810,7 @@ workflows:
           publish: true
           context:
             - oplabs-gcr
+            - slack
       - docker-build:
           name: op-challenger-docker-publish
           docker_name: op-challenger
@@ -1724,6 +1820,7 @@ workflows:
           publish: true
           context:
             - oplabs-gcr
+            - slack
       - docker-build:
           name: op-heartbeat-docker-publish
           docker_name: op-heartbeat
@@ -1733,6 +1830,7 @@ workflows:
           publish: true
           context:
             - oplabs-gcr
+            - slack
       - docker-build:
           name: indexer-docker-publish
           docker_name: indexer
@@ -1740,14 +1838,27 @@ workflows:
           publish: true
           context:
             - oplabs-gcr
+            - slack
           platforms: "linux/amd64,linux/arm64"
       - docker-build:
           name: chain-mon-docker-publish
           docker_name: chain-mon
           docker_tags: <<pipeline.git.revision>>,<<pipeline.git.branch>>
+          resource_class: xlarge
           publish: true
           context:
             - oplabs-gcr
+            - slack
+      - docker-build:
+          name: contracts-bedrock-docker-publish
+          docker_name: contracts-bedrock
+          docker_tags: <<pipeline.git.revision>>,<<pipeline.git.branch>>
+          resource_class: xlarge
+          requires: [ 'chain-mon-docker-publish' ] # use the cached base image
+          publish: true
+          context:
+            - oplabs-gcr
+            - slack
       - docker-build:
           name: ufm-metamask-docker-publish
           docker_name: ufm-metamask
@@ -1755,3 +1866,4 @@ workflows:
           publish: true
           context:
             - oplabs-gcr
+            - slack
